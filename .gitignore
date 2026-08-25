@@ -1,0 +1,37 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Wails
+build/bin/
+bin/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# Logs
+*.log
+
+# Banco local
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Android
+.gradle/
+local.properties
+*.apk
+*.aab

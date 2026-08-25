@@ -1,0 +1,41 @@
+package main
+
+import (
+	"context"
+	"fmt"
+    "os"
+)
+
+// App struct
+type App struct {
+	ctx context.Context
+}
+
+// NewApp creates a new App application struct
+func NewApp() *App {
+	return &App{}
+}
+
+// startup is called when the app starts. The context is saved
+// so we can call the runtime methods
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+    
+    iniciarServidor()
+    go iniciarMDNS()
+}
+
+// Greet returns a greeting for the given name
+func (a *App) Greet(name string) string {
+	return fmt.Sprintf("Hello %s, ♡ hIt's show time!", name)
+}
+func (a *App) CriarArquivo() string {
+	conteudo := []byte("Arquivo criado pelo Wails!")
+
+	err := os.WriteFile("/home/maerli/arquivo.txt", conteudo, 0644)
+	if err != nil {
+		return err.Error()
+	}
+
+	return "Arquivo criado com sucesso!"
+}

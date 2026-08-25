@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "NovoApp",
+  "outputfilename": "NovoApp",
+  "frontend:install": "yarnpkg install",
+  "frontend:build": "yarnpkg run build",
+  "frontend:dev:watcher": "yarnpkg run dev --host 0.0.0.0 --port 5173",
+  "frontend:dev:serverUrl": "http://localhost:5173",
+  "author": {
+    "name": "",
+    "email": ""
+  }
+}
