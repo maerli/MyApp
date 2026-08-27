@@ -4,164 +4,102 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"strings"
-
-	"golang.org/x/sys/windows"
+	"sync"
 )
 
 const udpPort = 45454
 
+var (
+	udpConn *net.UDPConn
+	udpMu   sync.Mutex
+)
+
 func iniciarUDPDiscovery() {
+	udpMu.Lock()
 
-	/*
-		Inicializa Winsock manualmente.
-		0x0202 = Winsock 2.2
-	*/
-	var wsaData windows.WSAData
-
-	err := windows.WSAStartup(
-		0x0202,
-		&wsaData,
-	)
-
-	if err != nil {
-		fmt.Println(
-			"Erro WSAStartup:",
-			err,
-		)
+	if udpConn != nil {
+		udpMu.Unlock()
+		fmt.Println("[UDP] Já está ativo")
 		return
 	}
 
-	defer windows.WSACleanup()
-
-	/*
-		Cria o socket DIRETAMENTE.
-
-		IMPORTANTE:
-		não usamos net.ListenUDP(),
-		portanto o Go NÃO executará:
-
-		WSAIoctl(SIO_UDP_CONNRESET)
-	*/
-	socket, err := windows.Socket(
-		windows.AF_INET,
-		windows.SOCK_DGRAM,
-		windows.IPPROTO_UDP,
-	)
-
-	if err != nil {
-		fmt.Println(
-			"Erro criando socket UDP:",
-			err,
-		)
-		return
-	}
-
-	defer windows.Closesocket(socket)
-
-	/*
-		Escuta em:
-
-		0.0.0.0:45454
-	*/
-	addr := &windows.SockaddrInet4{
-		Port: udpPort,
-
-		Addr: [4]byte{
-			0,
-			0,
-			0,
-			0,
+	conn, err := net.ListenUDP(
+		"udp4",
+		&net.UDPAddr{
+			IP:   net.IPv4zero,
+			Port: udpPort,
 		},
-	}
-
-	err = windows.Bind(
-		socket,
-		addr,
 	)
 
 	if err != nil {
-		fmt.Println(
-			"Erro bind UDP:",
-			err,
-		)
+		udpMu.Unlock()
+		fmt.Println("[UDP] Erro:", err)
 		return
 	}
 
-	fmt.Println(
-		"UDP Discovery ativo em 0.0.0.0:45454",
-	)
+	udpConn = conn
+	udpMu.Unlock()
 
 	fmt.Println(
-		"Aguardando DISCOVER_MEUAPP...",
+		"[UDP] Discovery ativo na porta",
+		udpPort,
 	)
 
-	buffer :=
-		make([]byte, 1024)
+	buffer := make([]byte, 1024)
 
 	for {
-
 		n, remoto, err :=
-			windows.Recvfrom(
-				socket,
-				buffer,
-				0,
-			)
+			conn.ReadFromUDP(buffer)
 
 		if err != nil {
+			udpMu.Lock()
+
+			fechado :=
+				udpConn != conn
+
+			udpMu.Unlock()
+
+			if fechado {
+				fmt.Println(
+					"[UDP] Encerrado",
+				)
+				return
+			}
+
 			fmt.Println(
-				"Erro recebendo UDP:",
+				"[UDP] Erro leitura:",
 				err,
 			)
 
-			continue
-		}
-
-		if n <= 0 {
 			continue
 		}
 
 		mensagem :=
 			strings.TrimSpace(
-				string(
-					buffer[:n],
-				),
+				string(buffer[:n]),
 			)
 
 		fmt.Println(
-			"UDP recebido:",
+			"[UDP] Recebido:",
 			mensagem,
+			"de",
+			remoto.String(),
 		)
 
-		if mensagem !=
-			"DISCOVER_MEUAPP" {
-
+		if mensagem != "DISCOVER_MEUAPP" {
 			continue
 		}
 
-		/*
-			O APK obterá o IP do próprio
-			endereço de origem da resposta.
-
-			Então só precisamos informar
-			a porta HTTP.
-		*/
-		resposta :=
-			[]byte(
-				"MEUAPP|8080",
-			)
-
-		err =
-			windows.Sendto(
-				socket,
-				resposta,
-				0,
-				remoto,
-			)
+		_, err = conn.WriteToUDP(
+			[]byte("MEUAPP|8080"),
+			remoto,
+		)
 
 		if err != nil {
 			fmt.Println(
-				"Erro respondendo UDP:",
+				"[UDP] Erro resposta:",
 				err,
 			)
 
@@ -169,23 +107,28 @@ func iniciarUDPDiscovery() {
 		}
 
 		fmt.Println(
-			"Discovery respondido:",
-			"MEUAPP|8080",
+			"[UDP] Resposta enviada para",
+			remoto.String(),
 		)
-
-		if ip,
-			ok :=
-			remoto.(*windows.SockaddrInet4);
-			ok {
-
-			fmt.Printf(
-				"Cliente: %d.%d.%d.%d:%d\n",
-				ip.Addr[0],
-				ip.Addr[1],
-				ip.Addr[2],
-				ip.Addr[3],
-				ip.Port,
-			)
-		}
 	}
+}
+
+func pararUDPDiscovery() {
+	udpMu.Lock()
+
+	conn := udpConn
+	udpConn = nil
+
+	udpMu.Unlock()
+
+	if conn == nil {
+		return
+	}
+
+	fmt.Println(
+		"[UDP] Fechando porta",
+		udpPort,
+	)
+
+	_ = conn.Close()
 }

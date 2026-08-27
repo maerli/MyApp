@@ -3,27 +3,25 @@ package main
 import (
 	"embed"
 	"fmt"
-	
-	
-
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	fmt.Println("================================")
+	fmt.Println("COMANDA FÁCIL - ANDROID")
+	fmt.Println("================================")
 
-	go iniciarServidor()
-
+	fmt.Println("[APP] Iniciando UDP...")
 	go iniciarUDPDiscovery()
 
-	fmt.Println(
-		"Servidor HTTP: 8080",
-	)
+	fmt.Println("[APP] Iniciando HTTP...")
 
-	fmt.Println(
-		"Discovery UDP: 45454",
-	)
-
-	select {}
+	if err := iniciarServidor(); err != nil {
+		fmt.Println(
+			"[HTTP] Servidor encerrado:",
+			err,
+		)
+	}
 }

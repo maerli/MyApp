@@ -3,13 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-    "io/fs"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -27,11 +26,10 @@ const (
 )
 
 var (
-	db         *sql.DB
-	serverOnce sync.Once
-	jwtSecret  = []byte(segredoJWT())
-	fusoLocal  = time.FixedZone("America/Fortaleza", -3*60*60)
-	tempoReal  = novoHubWebSocket()
+	db        *sql.DB
+	jwtSecret = []byte(segredoJWT())
+	fusoLocal = time.FixedZone("America/Fortaleza", -3*60*60)
+	tempoReal = novoHubWebSocket()
 )
 
 type Produto struct {
@@ -104,10 +102,10 @@ type clienteWebSocket struct {
 }
 
 type hubWebSocket struct {
-	clientes  map[*clienteWebSocket]struct{}
-	entrar    chan *clienteWebSocket
-	sair      chan *clienteWebSocket
-	eventos   chan eventoTempoReal
+	clientes map[*clienteWebSocket]struct{}
+	entrar   chan *clienteWebSocket
+	sair     chan *clienteWebSocket
+	eventos  chan eventoTempoReal
 }
 
 func novoHubWebSocket() *hubWebSocket {
@@ -233,164 +231,255 @@ func configurarFrontend(router *gin.Engine) {
 		assets,
 		"frontend/dist",
 	)
-
 	if err != nil {
 		panic(err)
 	}
 
-	fileServer :=
-		http.FileServer(
-			http.FS(frontendFS),
-		)
+	indexHTML, err := fs.ReadFile(
+		frontendFS,
+		"index.html",
+	)
+	if err != nil {
+		panic(err)
+	}
 
 	router.GET(
 		"/assets/*filepath",
 		func(c *gin.Context) {
-			fileServer.ServeHTTP(
-				c.Writer,
-				c.Request,
+			caminho :=
+				strings.TrimPrefix(
+					c.Param("filepath"),
+					"/",
+				)
+
+			conteudo, err :=
+				fs.ReadFile(
+					frontendFS,
+					"assets/"+caminho,
+				)
+
+			if err != nil {
+				c.Status(http.StatusNotFound)
+				return
+			}
+
+			switch {
+			case strings.HasSuffix(caminho, ".js"):
+				c.Header(
+					"Content-Type",
+					"application/javascript; charset=utf-8",
+				)
+
+			case strings.HasSuffix(caminho, ".css"):
+				c.Header(
+					"Content-Type",
+					"text/css; charset=utf-8",
+				)
+
+			case strings.HasSuffix(caminho, ".svg"):
+				c.Header(
+					"Content-Type",
+					"image/svg+xml",
+				)
+			}
+
+			c.Data(
+				http.StatusOK,
+				c.Writer.Header().Get("Content-Type"),
+				conteudo,
 			)
 		},
 	)
 
-	router.GET(
-		"/",
-		func(c *gin.Context) {
-			c.Request.URL.Path = "/"
+	servirIndex := func(c *gin.Context) {
+		c.Data(
+			http.StatusOK,
+			"text/html; charset=utf-8",
+			indexHTML,
+		)
+	}
 
-			fileServer.ServeHTTP(
-				c.Writer,
-				c.Request,
-			)
-		},
-	)
+	router.GET("/", servirIndex)
 
 	router.NoRoute(
 		func(c *gin.Context) {
-
-			path :=
-				c.Request.URL.Path
-
-			// API inexistente continua 404
 			if strings.HasPrefix(
-				path,
+				c.Request.URL.Path,
 				"/api/",
 			) {
 				c.JSON(
 					http.StatusNotFound,
 					gin.H{
-						"erro":
-							"Rota não encontrada",
+						"erro": "Rota não encontrada",
 					},
 				)
-
 				return
 			}
 
-			// Para React Router / SPA
-			c.Request.URL.Path = "/"
-
-			fileServer.ServeHTTP(
-				c.Writer,
-				c.Request,
-			)
+			servirIndex(c)
 		},
 	)
 }
 
+func iniciarServidor() error {
+	fmt.Println("[1] Abrindo SQLite")
 
-func iniciarServidor() {
-	serverOnce.Do(func() {
-		var err error
-		db, err = sql.Open(
-			"sqlite",
-			"file:comandas.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)",
-		)
-		if err != nil {
-			panic(err)
-		}
+	var err error
 
-		db.SetMaxOpenConns(1)
-		if err = db.Ping(); err != nil {
-			panic(err)
-		}
-		if err = criarTabelas(); err != nil {
-			panic(err)
-		}
-		if err = criarAdminInicial(); err != nil {
-			panic(err)
-		}
-		if err = sincronizarRelatoriosExistentes(); err != nil {
-			fmt.Println("Aviso ao sincronizar relatórios:", err)
-		}
+	db, err = sql.Open(
+		"sqlite",
+		"file:comandas.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)",
+	)
+	if err != nil {
+		return fmt.Errorf("abrir banco: %w", err)
+	}
 
-		gin.SetMode(gin.ReleaseMode)
-		router := gin.New()
-		router.Use(gin.Logger(), gin.Recovery())
-		router.Use(cors.New(cors.Config{
-			AllowOriginFunc: func(origin string) bool {
-				return origemPermitida(origin)
+	db.SetMaxOpenConns(1)
+
+	fmt.Println("[2] Ping SQLite")
+	if err = db.Ping(); err != nil {
+		return fmt.Errorf("conectar ao banco: %w", err)
+	}
+
+	fmt.Println("[3] Criando tabelas")
+	if err = criarTabelas(); err != nil {
+		return fmt.Errorf("criar tabelas: %w", err)
+	}
+
+	fmt.Println("[4] Criando administrador")
+	if err = criarAdminInicial(); err != nil {
+		return fmt.Errorf("criar administrador inicial: %w", err)
+	}
+
+	fmt.Println("[5] Banco SQLite pronto")
+
+	// DESATIVADO TEMPORARIAMENTE PARA DIAGNÓSTICO NO ANDROID.
+	// Depois que o servidor estiver confirmado funcionando, pode reativar.
+	// if err = sincronizarRelatoriosExistentes(); err != nil {
+	//     fmt.Println("Aviso ao sincronizar relatórios:", err)
+	// }
+
+	fmt.Println("[6] Criando Gin")
+	gin.SetMode(gin.ReleaseMode)
+
+	router := gin.New()
+	router.Use(gin.Logger(), gin.Recovery())
+
+	fmt.Println("[7] Configurando CORS")
+	router.Use(
+		cors.New(
+			cors.Config{
+				AllowOriginFunc: func(origin string) bool {
+					return origemPermitida(origin)
+				},
+				AllowMethods: []string{
+					"GET",
+					"POST",
+					"PUT",
+					"DELETE",
+					"OPTIONS",
+				},
+				AllowHeaders: []string{
+					"Origin",
+					"Content-Type",
+					"Accept",
+					"Authorization",
+					"X-Client-ID",
+				},
+				AllowCredentials: true,
+				MaxAge:           12 * time.Hour,
 			},
-			AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Client-ID"},
-			AllowCredentials: true,
-			MaxAge:           12 * time.Hour,
-		}))
-        
-      
+		),
+	)
 
+	fmt.Println("[8] Criando rota de teste")
+	router.GET(
+		"/api/status",
+		func(c *gin.Context) {
+			c.JSON(
+				http.StatusOK,
+				gin.H{
+					"status": "online",
+					"app":    "Comanda Fácil",
+				},
+			)
+		},
+	)
 
-		//router.GET("/", func(c *gin.Context) {
-		//	c.JSON(http.StatusOK, gin.H{"status": "online", "app": "Comanda Fácil"})
-		//})
+	fmt.Println("[9] Configurando API")
+	api := router.Group("/api")
 
-		api := router.Group("/api")
-		api.POST("/login", login)
-		api.GET("/ws", conectarWebSocket)
+	api.POST("/login", login)
+	api.GET("/ws", conectarWebSocket)
 
-		auth := api.Group("")
-		auth.Use(authMiddleware())
-		auth.GET("/produtos", listarProdutos)
-		auth.POST("/produtos", adminMiddleware(), criarProduto)
-		auth.PUT("/produtos/:id", adminMiddleware(), editarProduto)
+	auth := api.Group("")
+	auth.Use(authMiddleware())
 
-		auth.GET("/usuarios", adminMiddleware(), listarUsuarios)
-		auth.POST("/usuarios", adminMiddleware(), criarUsuario)
-		auth.PUT("/usuarios/:id", adminMiddleware(), editarUsuario)
+	auth.GET("/produtos", listarProdutos)
+	auth.POST("/produtos", adminMiddleware(), criarProduto)
+	auth.PUT("/produtos/:id", adminMiddleware(), editarProduto)
 
-		auth.GET("/comandas", listarComandas)
-		auth.POST("/comandas", criarComanda)
-		auth.GET("/comandas/:id", buscarComanda)
-		auth.DELETE("/comandas/:id", adminMiddleware(), excluirComanda)
-		auth.GET("/comandas/:id/itens", listarItens)
-		auth.POST("/comandas/:id/itens", adicionarItem)
-		auth.PUT("/itens/:id/quantidade", atualizarQuantidadeItem)
-		auth.DELETE("/itens/:id", excluirItem)
-		auth.POST("/comandas/:id/pagamento", pagarComanda)
-		auth.POST("/comandas/:id/confirmar-pix", confirmarPix)
+	auth.GET("/usuarios", adminMiddleware(), listarUsuarios)
+	auth.POST("/usuarios", adminMiddleware(), criarUsuario)
+	auth.PUT("/usuarios/:id", adminMiddleware(), editarUsuario)
 
-		auth.GET("/caixas", adminMiddleware(), listarCaixas)
-		auth.POST("/usuarios/:id/fechar-caixa", adminMiddleware(), fecharCaixa)
-		auth.GET("/usuarios/:id/fechamentos", adminMiddleware(), listarFechamentos)
+	auth.GET("/comandas", listarComandas)
+	auth.POST("/comandas", criarComanda)
+	auth.GET("/comandas/:id", buscarComanda)
+	auth.DELETE("/comandas/:id", adminMiddleware(), excluirComanda)
+	auth.GET("/comandas/:id/itens", listarItens)
+	auth.POST("/comandas/:id/itens", adicionarItem)
+	auth.PUT("/itens/:id/quantidade", atualizarQuantidadeItem)
+	auth.DELETE("/itens/:id", excluirItem)
+	auth.POST("/comandas/:id/pagamento", pagarComanda)
+	auth.POST("/comandas/:id/confirmar-pix", confirmarPix)
 
-		auth.GET("/relatorios/dia", adminMiddleware(), buscarRelatorioDia)
-		auth.GET("/relatorios/datas", adminMiddleware(), listarDatasRelatorios)
-		auth.GET("/relatorios/por-usuario", adminMiddleware(), relatorioPorUsuario)
-		auth.GET("/relatorios/final-dia", adminMiddleware(), relatorioFinalDia)
+	auth.GET("/caixas", adminMiddleware(), listarCaixas)
+	auth.POST(
+		"/usuarios/:id/fechar-caixa",
+		adminMiddleware(),
+		fecharCaixa,
+	)
+	auth.GET(
+		"/usuarios/:id/fechamentos",
+		adminMiddleware(),
+		listarFechamentos,
+	)
 
-        
-      configurarFrontend(router)
-	
+	auth.GET(
+		"/relatorios/dia",
+		adminMiddleware(),
+		buscarRelatorioDia,
+	)
+	auth.GET(
+		"/relatorios/datas",
+		adminMiddleware(),
+		listarDatasRelatorios,
+	)
+	auth.GET(
+		"/relatorios/por-usuario",
+		adminMiddleware(),
+		relatorioPorUsuario,
+	)
+	auth.GET(
+		"/relatorios/final-dia",
+		adminMiddleware(),
+		relatorioFinalDia,
+	)
 
+	fmt.Println("[10] Configurando frontend")
+	configurarFrontend(router)
 
-        
-		go func() {
-			fmt.Println("Servidor disponível em http://0.0.0.0:8080")
-			if err := router.Run("0.0.0.0:8080"); err != nil {
-				fmt.Println("Erro no servidor:", err)
-			}
-		}()
-	})
+	fmt.Println("[11] TUDO PRONTO")
+	fmt.Println("[12] ABRINDO PORTA 8080")
+	fmt.Println("http://127.0.0.1:8080")
+	fmt.Println("http://127.0.0.1:8080/api/status")
+
+	if err = router.Run("0.0.0.0:8080"); err != nil {
+		return fmt.Errorf("erro ao abrir servidor HTTP: %w", err)
+	}
+
+	return nil
 }
 
 func criarTabelas() error {
@@ -1938,5 +2027,3 @@ func crc16(data string) uint16 {
 	}
 	return crc
 }
-
-

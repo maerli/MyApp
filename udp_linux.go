@@ -1,5 +1,8 @@
-//go:build linux
 
+
+//go:build linux && !android
+
+package main
 package main
 
 import (
