@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	pixKey    = "+5588981628528"
-	pixNome   = "SEU NOME"
-	pixCidade = "SUA CIDADE"
+	pixKeyPadrao    = "+5588981628528"
+	pixNomePadrao   = "SEU NOME"
+	pixCidadePadrao = "SUA CIDADE"
 )
 
 var (
@@ -33,10 +33,11 @@ var (
 )
 
 type Produto struct {
-	ID    int64   `json:"id"`
-	Nome  string  `json:"nome"`
-	Preco float64 `json:"preco"`
-	Ativo bool    `json:"ativo"`
+	ID        int64   `json:"id"`
+	Nome      string  `json:"nome"`
+	Categoria string  `json:"categoria"`
+	Preco     float64 `json:"preco"`
+	Ativo     bool    `json:"ativo"`
 }
 
 type Usuario struct {
@@ -419,6 +420,9 @@ func iniciarServidor() error {
 	auth.POST("/produtos", adminMiddleware(), criarProduto)
 	auth.PUT("/produtos/:id", adminMiddleware(), editarProduto)
 
+	auth.GET("/configuracoes", adminMiddleware(), buscarConfiguracoes)
+	auth.PUT("/configuracoes", adminMiddleware(), salvarConfiguracoes)
+
 	auth.GET("/usuarios", adminMiddleware(), listarUsuarios)
 	auth.POST("/usuarios", adminMiddleware(), criarUsuario)
 	auth.PUT("/usuarios/:id", adminMiddleware(), editarUsuario)
@@ -496,8 +500,14 @@ func criarTabelas() error {
 	CREATE TABLE IF NOT EXISTS produtos (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		nome TEXT NOT NULL,
+		categoria TEXT NOT NULL DEFAULT 'Geral',
 		preco REAL NOT NULL DEFAULT 0,
 		ativo INTEGER NOT NULL DEFAULT 1
+	);
+
+	CREATE TABLE IF NOT EXISTS configuracoes (
+		chave TEXT PRIMARY KEY,
+		valor TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS comandas (
@@ -560,6 +570,20 @@ func criarTabelas() error {
 	CREATE INDEX IF NOT EXISTS idx_relatorios_usuarios_data
 		ON relatorios_diarios_usuarios(data);
 	`)
+	if err != nil {
+		return err
+	}
+
+	// Migração para bancos já existentes. Se a coluna já existe, o erro é ignorado.
+	_, _ = db.Exec("ALTER TABLE produtos ADD COLUMN categoria TEXT NOT NULL DEFAULT 'Geral'")
+
+	_, err = db.Exec(`
+		INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES
+			('pix_chave', ?),
+			('pix_nome', ?),
+			('pix_cidade', ?)
+	`, pixKeyPadrao, pixNomePadrao, pixCidadePadrao)
+
 	return err
 }
 
@@ -909,11 +933,11 @@ func editarUsuario(c *gin.Context) {
 }
 
 func listarProdutos(c *gin.Context) {
-	query := "SELECT id, nome, preco, ativo FROM produtos"
+	query := "SELECT id, nome, COALESCE(categoria, 'Geral'), preco, ativo FROM produtos"
 	if c.GetString("perfil") != "admin" {
 		query += " WHERE ativo=1"
 	}
-	query += " ORDER BY nome"
+	query += " ORDER BY categoria, nome"
 
 	rows, err := db.Query(query)
 	if err != nil {
@@ -926,7 +950,7 @@ func listarProdutos(c *gin.Context) {
 	for rows.Next() {
 		var produto Produto
 		var ativo int
-		if err := rows.Scan(&produto.ID, &produto.Nome, &produto.Preco, &ativo); err != nil {
+		if err := rows.Scan(&produto.ID, &produto.Nome, &produto.Categoria, &produto.Preco, &ativo); err != nil {
 			responderErro(c, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -937,15 +961,20 @@ func listarProdutos(c *gin.Context) {
 }
 
 type produtoEntrada struct {
-	Nome  string  `json:"nome"`
-	Preco float64 `json:"preco"`
-	Ativo *bool   `json:"ativo"`
+	Nome      string  `json:"nome"`
+	Categoria string  `json:"categoria"`
+	Preco     float64 `json:"preco"`
+	Ativo     *bool   `json:"ativo"`
 }
 
 func validarProduto(entrada *produtoEntrada) string {
 	entrada.Nome = strings.TrimSpace(entrada.Nome)
+	entrada.Categoria = strings.TrimSpace(entrada.Categoria)
 	if entrada.Nome == "" {
 		return "Informe o nome do produto"
+	}
+	if entrada.Categoria == "" {
+		entrada.Categoria = "Geral"
 	}
 	if entrada.Preco < 0 {
 		return "O preço não pode ser negativo"
@@ -969,8 +998,8 @@ func criarProduto(c *gin.Context) {
 		ativo = *entrada.Ativo
 	}
 	resultado, err := db.Exec(
-		"INSERT INTO produtos (nome, preco, ativo) VALUES (?, ?, ?)",
-		entrada.Nome, entrada.Preco, ativo,
+		"INSERT INTO produtos (nome, categoria, preco, ativo) VALUES (?, ?, ?, ?)",
+		entrada.Nome, entrada.Categoria, entrada.Preco, ativo,
 	)
 	if err != nil {
 		responderErro(c, http.StatusInternalServerError, err.Error())
@@ -978,7 +1007,7 @@ func criarProduto(c *gin.Context) {
 	}
 	id, _ := resultado.LastInsertId()
 	notificarTempoReal(c, 0, "produtos")
-	c.JSON(http.StatusCreated, Produto{ID: id, Nome: entrada.Nome, Preco: entrada.Preco, Ativo: ativo})
+	c.JSON(http.StatusCreated, Produto{ID: id, Nome: entrada.Nome, Categoria: entrada.Categoria, Preco: entrada.Preco, Ativo: ativo})
 }
 
 func editarProduto(c *gin.Context) {
@@ -1001,8 +1030,8 @@ func editarProduto(c *gin.Context) {
 		ativo = *entrada.Ativo
 	}
 	resultado, err := db.Exec(
-		"UPDATE produtos SET nome=?, preco=?, ativo=? WHERE id=?",
-		entrada.Nome, entrada.Preco, ativo, id,
+		"UPDATE produtos SET nome=?, categoria=?, preco=?, ativo=? WHERE id=?",
+		entrada.Nome, entrada.Categoria, entrada.Preco, ativo, id,
 	)
 	if err != nil {
 		responderErro(c, http.StatusInternalServerError, err.Error())
@@ -1014,7 +1043,96 @@ func editarProduto(c *gin.Context) {
 		return
 	}
 	notificarTempoReal(c, 0, "produtos")
-	c.JSON(http.StatusOK, Produto{ID: id, Nome: entrada.Nome, Preco: entrada.Preco, Ativo: ativo})
+	c.JSON(http.StatusOK, Produto{ID: id, Nome: entrada.Nome, Categoria: entrada.Categoria, Preco: entrada.Preco, Ativo: ativo})
+}
+
+func lerConfiguracao(chave, padrao string) string {
+	var valor string
+	if err := db.QueryRow("SELECT valor FROM configuracoes WHERE chave=?", chave).Scan(&valor); err != nil {
+		return padrao
+	}
+	valor = strings.TrimSpace(valor)
+	if valor == "" {
+		return padrao
+	}
+	return valor
+}
+
+func configuracaoPix() (string, string, string) {
+	return lerConfiguracao("pix_chave", pixKeyPadrao),
+		lerConfiguracao("pix_nome", pixNomePadrao),
+		lerConfiguracao("pix_cidade", pixCidadePadrao)
+}
+
+func buscarConfiguracoes(c *gin.Context) {
+	chave, nome, cidade := configuracaoPix()
+	c.JSON(http.StatusOK, gin.H{
+		"pix_chave":  chave,
+		"pix_nome":   nome,
+		"pix_cidade": cidade,
+	})
+}
+
+func salvarConfiguracoes(c *gin.Context) {
+	var entrada struct {
+		PixChave  string `json:"pix_chave"`
+		PixNome   string `json:"pix_nome"`
+		PixCidade string `json:"pix_cidade"`
+	}
+	if err := c.ShouldBindJSON(&entrada); err != nil {
+		responderErro(c, http.StatusBadRequest, "Dados inválidos")
+		return
+	}
+
+	entrada.PixChave = strings.TrimSpace(entrada.PixChave)
+	entrada.PixNome = strings.TrimSpace(entrada.PixNome)
+	entrada.PixCidade = strings.TrimSpace(entrada.PixCidade)
+	if entrada.PixChave == "" {
+		responderErro(c, http.StatusBadRequest, "Informe a chave Pix")
+		return
+	}
+	if entrada.PixNome == "" {
+		responderErro(c, http.StatusBadRequest, "Informe o nome do recebedor")
+		return
+	}
+	if entrada.PixCidade == "" {
+		responderErro(c, http.StatusBadRequest, "Informe a cidade")
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		responderErro(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	configs := map[string]string{
+		"pix_chave":  entrada.PixChave,
+		"pix_nome":   entrada.PixNome,
+		"pix_cidade": entrada.PixCidade,
+	}
+	for chave, valor := range configs {
+		_, err = tx.Exec(`
+			INSERT INTO configuracoes (chave, valor) VALUES (?, ?)
+			ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor
+		`, chave, valor)
+		if err != nil {
+			responderErro(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		responderErro(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	notificarTempoReal(c, 0, "configuracoes")
+	c.JSON(http.StatusOK, gin.H{
+		"pix_chave":  entrada.PixChave,
+		"pix_nome":   entrada.PixNome,
+		"pix_cidade": entrada.PixCidade,
+	})
 }
 
 func autorizarComanda(c *gin.Context, id int64, exigirAberta bool) bool {
@@ -1437,9 +1555,10 @@ func pagarComanda(c *gin.Context) {
 	}
 
 	if entrada.Forma == "pix" {
+		chavePix, nomePix, cidadePix := configuracaoPix()
 		c.JSON(http.StatusOK, gin.H{
-			"pix":        gerarPix(pixKey, pixNome, pixCidade, total, "CMD"+strconv.FormatInt(id, 10)),
-			"chave":      pixKey,
+			"pix":        gerarPix(chavePix, nomePix, cidadePix, total, "CMD"+strconv.FormatInt(id, 10)),
+			"chave":      chavePix,
 			"total":      total,
 			"aguardando": true,
 		})

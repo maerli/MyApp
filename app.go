@@ -15,6 +15,7 @@ func NewApp() *App {
 	return &App{}
 }
 
+
 // startup é chamado quando o Wails inicia.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx

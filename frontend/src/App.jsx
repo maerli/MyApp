@@ -4,7 +4,9 @@ import { QRCodeSVG } from "qrcode.react";
 const host = window.location.protocol === "wails:"
   ? "127.0.0.1"
   : window.location.hostname || "127.0.0.1";
+
 const API = (import.meta.env.VITE_API_URL || `http://${host}:8080/api`).replace(/\/$/, "");
+
 const WS = (() => {
   const endereco = new URL(`${API}/ws`, window.location.href);
   endereco.protocol = endereco.protocol === "https:" ? "wss:" : "ws:";
@@ -23,6 +25,7 @@ const usuarioNovo = () => ({
 const produtoNovo = () => ({
   id: null,
   nome: "",
+  categoria: "Geral",
   preco: "",
   ativo: true
 });
@@ -74,6 +77,7 @@ function Modal({ titulo, subtitulo, onClose, children, grande = false }) {
     const fecharComEsc = event => event.key === "Escape" && onClose();
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", fecharComEsc);
+
     return () => {
       document.body.style.overflow = overflow;
       window.removeEventListener("keydown", fecharComEsc);
@@ -138,6 +142,7 @@ const paginasAdmin = [
   ["comandas", "Comandas"],
   ["usuarios", "Usuários"],
   ["produtos", "Produtos"],
+  ["configuracoes", "Configurações"],
   ["caixas", "Caixa"],
   ["relatorios", "Relatórios"]
 ];
@@ -146,9 +151,9 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [usuario, setUsuario] = useState(lerUsuario);
   const [clienteID] = useState(() =>
-    window.crypto?.randomUUID?.() ||
-    `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   );
+
   const [login, setLogin] = useState("");
   const [senha, setSenha] = useState("");
   const [pagina, setPagina] = useState("comandas");
@@ -162,9 +167,16 @@ export default function App() {
 
   const [mesa, setMesa] = useState("");
   const [buscaProduto, setBuscaProduto] = useState("");
+  const [categoriaProduto, setCategoriaProduto] = useState("todos");
   const [filtroUsuario, setFiltroUsuario] = useState("todos");
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [pix, setPix] = useState(null);
+
+  const [configuracoes, setConfiguracoes] = useState({
+    pix_chave: "",
+    pix_nome: "",
+    pix_cidade: ""
+  });
 
   const [novaComandaAberta, setNovaComandaAberta] = useState(false);
   const [editorUsuario, setEditorUsuario] = useState(null);
@@ -179,6 +191,7 @@ export default function App() {
   const [aviso, setAviso] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [tempoRealAtivo, setTempoRealAtivo] = useState(false);
+
   const estadoTempoReal = useRef({
     pagina: "comandas",
     comandaID: null,
@@ -204,6 +217,7 @@ export default function App() {
 
   async function requisicao(caminho, opcoes = {}) {
     let resposta;
+
     try {
       resposta = await fetch(`${API}${caminho}`, {
         method: opcoes.method || "GET",
@@ -233,20 +247,24 @@ export default function App() {
       sair();
       throw new Error("Sua sessão terminou. Entre novamente.");
     }
+
     if (!resposta.ok) {
       throw new Error(dados.erro || "Não foi possível concluir a operação.");
     }
+
     return dados;
   }
 
   async function entrar(event) {
     event.preventDefault();
     setOcupado(true);
+
     try {
       const dados = await requisicao("/login", {
         method: "POST",
         body: { login: login.trim(), senha }
       });
+
       localStorage.setItem("token", dados.token);
       localStorage.setItem("usuario", JSON.stringify(dados.usuario));
       setToken(dados.token);
@@ -279,6 +297,7 @@ export default function App() {
 
   async function carregarUsuarios(silencioso = false) {
     if (usuario?.perfil !== "admin") return;
+
     try {
       setUsuarios(await requisicao("/usuarios"));
     } catch (erro) {
@@ -288,6 +307,7 @@ export default function App() {
 
   async function carregarCaixas(silencioso = false) {
     if (usuario?.perfil !== "admin") return;
+
     try {
       setCaixas(await requisicao("/caixas"));
     } catch (erro) {
@@ -295,8 +315,38 @@ export default function App() {
     }
   }
 
+  async function carregarConfiguracoes(silencioso = false) {
+    if (usuario?.perfil !== "admin") return;
+
+    try {
+      setConfiguracoes(await requisicao("/configuracoes"));
+    } catch (erro) {
+      if (!silencioso) mostrarAviso(erro.message, "erro");
+    }
+  }
+
+  async function salvarConfiguracoes(event) {
+    event.preventDefault();
+    setOcupado(true);
+
+    try {
+      const dados = await requisicao("/configuracoes", {
+        method: "PUT",
+        body: configuracoes
+      });
+
+      setConfiguracoes(dados);
+      mostrarAviso("Configurações salvas.");
+    } catch (erro) {
+      mostrarAviso(erro.message, "erro");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   async function carregarDatasRelatorios(silencioso = false) {
     if (usuario?.perfil !== "admin") return;
+
     try {
       setDatasRelatorios(await requisicao("/relatorios/datas"));
     } catch (erro) {
@@ -307,10 +357,9 @@ export default function App() {
   async function carregarRelatorio(data = dataRelatorio, silencioso = false) {
     if (usuario?.perfil !== "admin") return;
     if (!silencioso) setOcupado(true);
+
     try {
-      const dados = await requisicao(
-        `/relatorios/dia?data=${encodeURIComponent(data)}`
-      );
+      const dados = await requisicao(`/relatorios/dia?data=${encodeURIComponent(data)}`);
       setDataRelatorio(dados.data);
       setRelatorio(dados);
       await carregarDatasRelatorios(true);
@@ -327,6 +376,7 @@ export default function App() {
         requisicao(`/comandas/${id}`),
         requisicao(`/comandas/${id}/itens`)
       ]);
+
       setComanda(dadosComanda);
       setItens(dadosItens);
       if (!silencioso) setPix(null);
@@ -348,11 +398,14 @@ export default function App() {
 
   useEffect(() => {
     if (!token || !usuario) return;
+
     carregarProdutos();
     carregarComandas();
+
     if (usuario.perfil === "admin") {
       carregarUsuarios();
       carregarCaixas();
+      carregarConfiguracoes();
     }
   }, [token, usuario?.perfil]);
 
@@ -384,8 +437,8 @@ export default function App() {
       if (recursos.has("produtos")) tarefas.push(carregarProdutos(true));
 
       const mesmaComanda =
-        estado.comandaID &&
-        Number(evento.comanda_id) === Number(estado.comandaID);
+        estado.comandaID && Number(evento.comanda_id) === Number(estado.comandaID);
+
       if (mesmaComanda && (recursos.has("comandas") || recursos.has("itens"))) {
         tarefas.push(abrirComanda(estado.comandaID, true));
       }
@@ -393,6 +446,8 @@ export default function App() {
       if (estado.perfil === "admin") {
         if (recursos.has("usuarios")) tarefas.push(carregarUsuarios(true));
         if (recursos.has("caixas")) tarefas.push(carregarCaixas(true));
+        if (recursos.has("configuracoes")) tarefas.push(carregarConfiguracoes(true));
+
         if (recursos.has("relatorios")) {
           tarefas.push(
             estado.relatorioData
@@ -414,6 +469,7 @@ export default function App() {
 
     function conectar() {
       if (encerrado) return;
+
       try {
         socket = new WebSocket(WS, [
           "comanda-facil",
@@ -429,13 +485,15 @@ export default function App() {
         tentativas = 0;
         setTempoRealAtivo(true);
       };
+
       socket.onmessage = mensagem => {
         try {
           sincronizar(JSON.parse(mensagem.data));
         } catch {
-          // Ignora mensagens que não pertencem ao protocolo do aplicativo.
+          // Ignora mensagens inválidas.
         }
       };
+
       socket.onerror = () => socket.close();
       socket.onclose = () => {
         setTempoRealAtivo(false);
@@ -444,6 +502,7 @@ export default function App() {
     }
 
     conectar();
+
     return () => {
       encerrado = true;
       clearTimeout(reconexao);
@@ -454,35 +513,44 @@ export default function App() {
 
   useEffect(() => {
     if (!token || !usuario || tempoRealAtivo) return undefined;
+
     const intervalo = setInterval(() => {
       carregarProdutos(true);
       carregarComandas(true);
+
       if (usuario.perfil === "admin") {
         if (pagina === "usuarios") carregarUsuarios(true);
         if (pagina === "caixas") carregarCaixas(true);
+        if (pagina === "configuracoes") carregarConfiguracoes(true);
         if (pagina === "relatorios") {
           relatorio?.data
             ? carregarRelatorio(relatorio.data, true)
             : carregarDatasRelatorios(true);
         }
       }
+
       if (comanda?.id) abrirComanda(comanda.id, true);
     }, 15000);
+
     return () => clearInterval(intervalo);
   }, [token, usuario?.perfil, tempoRealAtivo, pagina, comanda?.id, relatorio?.data]);
 
   async function criarComanda(event) {
     event.preventDefault();
+
     if (!mesa.trim()) {
       mostrarAviso("Informe a mesa ou identificação.", "erro");
       return;
     }
+
     setOcupado(true);
+
     try {
       const dados = await requisicao("/comandas", {
         method: "POST",
         body: { mesa: mesa.trim() }
       });
+
       setMesa("");
       setNovaComandaAberta(false);
       await carregarComandas(true);
@@ -497,11 +565,13 @@ export default function App() {
 
   async function adicionarProduto(produto) {
     if (!comanda) return;
+
     try {
       await requisicao(`/comandas/${comanda.id}/itens`, {
         method: "POST",
         body: { produto_id: produto.id, quantidade: 1 }
       });
+
       await Promise.all([
         abrirComanda(comanda.id, true),
         carregarComandas(true)
@@ -513,11 +583,13 @@ export default function App() {
 
   async function alterarQuantidade(item, quantidade) {
     if (quantidade < 1) return;
+
     try {
       await requisicao(`/itens/${item.id}/quantidade`, {
         method: "PUT",
         body: { quantidade }
       });
+
       await Promise.all([
         abrirComanda(comanda.id, true),
         carregarComandas(true)
@@ -530,6 +602,7 @@ export default function App() {
   async function removerItem(id) {
     try {
       await requisicao(`/itens/${id}`, { method: "DELETE" });
+
       await Promise.all([
         abrirComanda(comanda.id, true),
         carregarComandas(true)
@@ -541,11 +614,13 @@ export default function App() {
 
   async function pagar(forma) {
     setOcupado(true);
+
     try {
       const dados = await requisicao(`/comandas/${comanda.id}/pagamento`, {
         method: "POST",
         body: { forma }
       });
+
       if (forma === "pix") {
         setPix(dados);
       } else {
@@ -563,10 +638,12 @@ export default function App() {
 
   async function confirmarPix() {
     setOcupado(true);
+
     try {
       await requisicao(`/comandas/${comanda.id}/confirmar-pix`, {
         method: "POST"
       });
+
       setPix(null);
       setComanda(null);
       setItens([]);
@@ -600,6 +677,7 @@ export default function App() {
     event.preventDefault();
     const editando = Boolean(editorUsuario.id);
     setOcupado(true);
+
     try {
       const dados = await requisicao(
         editando ? `/usuarios/${editorUsuario.id}` : "/usuarios",
@@ -608,15 +686,18 @@ export default function App() {
           body: editorUsuario
         }
       );
+
       if (dados.id === usuario.id) {
         const usuarioAtualizado = {
           ...usuario,
           nome: dados.nome,
           login: dados.login
         };
+
         setUsuario(usuarioAtualizado);
         localStorage.setItem("usuario", JSON.stringify(usuarioAtualizado));
       }
+
       setEditorUsuario(null);
       await Promise.all([carregarUsuarios(true), carregarCaixas(true)]);
       mostrarAviso(editando ? "Usuário atualizado." : "Usuário criado.");
@@ -631,6 +712,7 @@ export default function App() {
     event.preventDefault();
     const editando = Boolean(editorProduto.id);
     setOcupado(true);
+
     try {
       await requisicao(
         editando ? `/produtos/${editorProduto.id}` : "/produtos",
@@ -638,10 +720,12 @@ export default function App() {
           method: editando ? "PUT" : "POST",
           body: {
             ...editorProduto,
+            categoria: (editorProduto.categoria || "Geral").trim() || "Geral",
             preco: Number(editorProduto.preco)
           }
         }
       );
+
       setEditorProduto(null);
       await carregarProdutos(true);
       mostrarAviso(editando ? "Produto atualizado." : "Produto criado.");
@@ -654,11 +738,13 @@ export default function App() {
 
   async function confirmarFechamento() {
     setOcupado(true);
+
     try {
       const dados = await requisicao(
         `/usuarios/${caixaParaFechar.usuario_id}/fechar-caixa`,
         { method: "POST" }
       );
+
       setCaixaParaFechar(null);
       await carregarCaixas(true);
       mostrarAviso(`Caixa fechado em ${moeda(dados.total)}.`);
@@ -671,17 +757,21 @@ export default function App() {
 
   async function excluirComanda() {
     setOcupado(true);
+
     try {
       await requisicao(`/comandas/${comandaParaExcluir.id}`, {
         method: "DELETE"
       });
+
       setComandaParaExcluir(null);
       setComanda(null);
       setItens([]);
+
       await Promise.all([
         carregarComandas(true),
         carregarCaixas(true)
       ]);
+
       if (relatorio) await carregarRelatorio(relatorio.data, true);
       mostrarAviso("Comanda excluída.");
     } catch (erro) {
@@ -692,17 +782,17 @@ export default function App() {
   }
 
   function abrirEditorUsuario(item) {
-    setEditorUsuario(
-      item
-        ? { ...item, senha: "" }
-        : usuarioNovo()
-    );
+    setEditorUsuario(item ? { ...item, senha: "" } : usuarioNovo());
   }
 
   function abrirEditorProduto(item) {
     setEditorProduto(
       item
-        ? { ...item, preco: String(item.preco) }
+        ? {
+            ...item,
+            categoria: item.categoria || "Geral",
+            preco: String(item.preco)
+          }
         : produtoNovo()
     );
   }
@@ -711,7 +801,10 @@ export default function App() {
     setPagina(destino);
     setComanda(null);
     setItens([]);
+
+    if (destino === "configuracoes") carregarConfiguracoes();
     if (destino === "caixas") carregarCaixas();
+
     if (destino === "relatorios") {
       carregarDatasRelatorios();
       carregarRelatorio(dataRelatorio);
@@ -720,6 +813,7 @@ export default function App() {
 
   function tipoComanda(item) {
     if (item.status === "aberta") return "Em aberto";
+
     return {
       dinheiro: "Dinheiro",
       cartao: "Cartão",
@@ -736,26 +830,43 @@ export default function App() {
     () =>
       comandas.filter(item => {
         const usuarioCorreto =
-          filtroUsuario === "todos" ||
-          String(item.usuario_id) === filtroUsuario;
+          filtroUsuario === "todos" || String(item.usuario_id) === filtroUsuario;
+
         const tipo = item.status === "aberta" ? "aberta" : item.forma_pagamento;
+
         const tipoCorreto =
           filtroTipo === "todos" ||
           (filtroTipo === "fechada" && item.status === "fechada") ||
           filtroTipo === tipo;
+
         return usuarioCorreto && tipoCorreto;
       }),
     [comandas, filtroUsuario, filtroTipo]
   );
 
+  const categoriasProdutos = useMemo(
+    () =>
+      [...new Set(
+        produtos
+          .filter(item => item.ativo)
+          .map(item => item.categoria || "Geral")
+      )].sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [produtos]
+  );
+
   const produtosFiltrados = useMemo(() => {
     const termo = buscaProduto.trim().toLocaleLowerCase("pt-BR");
-    return produtos.filter(
-      item =>
+
+    return produtos.filter(item => {
+      const categoria = item.categoria || "Geral";
+
+      return (
         item.ativo &&
+        (categoriaProduto === "todos" || categoria === categoriaProduto) &&
         (!termo || item.nome.toLocaleLowerCase("pt-BR").includes(termo))
-    );
-  }, [produtos, buscaProduto]);
+      );
+    });
+  }, [produtos, buscaProduto, categoriaProduto]);
 
   if (!token || !usuario) {
     return (
@@ -765,9 +876,11 @@ export default function App() {
           <h1>Atendimento simples.<br />Controle completo.</h1>
           <p>Use no computador ou no celular conectado à mesma rede.</p>
         </section>
+
         <form className="login-card" onSubmit={entrar}>
           <span className="sobre">Acesso ao sistema</span>
           <h2>Entrar</h2>
+
           <label>
             Usuário
             <input
@@ -779,6 +892,7 @@ export default function App() {
               placeholder="Digite seu usuário"
             />
           </label>
+
           <label>
             Senha
             <input
@@ -790,10 +904,12 @@ export default function App() {
               placeholder="Digite sua senha"
             />
           </label>
+
           <button className="botao botao-primario botao-largo" disabled={ocupado}>
             {ocupado ? "Entrando..." : "Entrar"}
           </button>
         </form>
+
         {aviso && <div className={`aviso aviso-${aviso.tipo}`}>{aviso.texto}</div>}
       </main>
     );
@@ -879,10 +995,12 @@ export default function App() {
               >
                 ← Voltar
               </button>
+
               <div>
                 <span className="sobre">Comanda #{comanda.id}</span>
                 <h1>Mesa {comanda.mesa}</h1>
               </div>
+
               <Selo tipo="aberta">Em aberto</Selo>
             </header>
 
@@ -898,8 +1016,33 @@ export default function App() {
                     aria-label="Buscar produto"
                   />
                 </div>
+
+                <div className="filtros-categoria">
+                  <button
+                    type="button"
+                    className={`botao ${categoriaProduto === "todos" ? "botao-primario" : "botao-claro"}`}
+                    onClick={() => setCategoriaProduto("todos")}
+                  >
+                    Todos
+                  </button>
+
+                  {categoriasProdutos.map(categoria => (
+                    <button
+                      type="button"
+                      key={categoria}
+                      className={`botao ${categoriaProduto === categoria ? "botao-primario" : "botao-claro"}`}
+                      onClick={() => setCategoriaProduto(categoria)}
+                    >
+                      {categoria}
+                    </button>
+                  ))}
+                </div>
+
                 {produtosFiltrados.length === 0 ? (
-                  <Vazio titulo="Nenhum produto" texto="Não há produto ativo com esse nome." />
+                  <Vazio
+                    titulo="Nenhum produto"
+                    texto="Não há produto ativo nessa busca ou categoria."
+                  />
                 ) : (
                   <div className="grade-produtos">
                     {produtosFiltrados.map(produto => (
@@ -910,6 +1053,7 @@ export default function App() {
                       >
                         <span>{produto.nome.slice(0, 1).toUpperCase()}</span>
                         <strong>{produto.nome}</strong>
+                        <small>{produto.categoria || "Geral"}</small>
                         <b>{moeda(produto.preco)}</b>
                         <small>+ Adicionar</small>
                       </button>
@@ -922,6 +1066,7 @@ export default function App() {
                 <div className="secao-topo">
                   <div><h2>Pedido</h2><p>{itens.length} produto(s)</p></div>
                 </div>
+
                 <div className="lista-itens">
                   {itens.length === 0 ? (
                     <div className="pedido-vazio">Adicione produtos ao pedido.</div>
@@ -932,12 +1077,15 @@ export default function App() {
                           <strong>{item.nome}</strong>
                           <span>{moeda(item.preco)} cada</span>
                         </div>
+
                         <div className="quantidade">
                           <button onClick={() => alterarQuantidade(item, item.quantidade - 1)}>−</button>
                           <strong>{item.quantidade}</strong>
                           <button onClick={() => alterarQuantidade(item, item.quantidade + 1)}>+</button>
                         </div>
+
                         <b>{moeda(item.subtotal)}</b>
+
                         <button
                           className="remover-item"
                           onClick={() => removerItem(item.id)}
@@ -949,8 +1097,10 @@ export default function App() {
                     ))
                   )}
                 </div>
+
                 <footer className="pedido-rodape">
                   <div><span>Total</span><strong>{moeda(comanda.total)}</strong></div>
+
                   <div className="formas-pagamento">
                     <button disabled={ocupado || !itens.length} onClick={() => pagar("dinheiro")}>Dinheiro</button>
                     <button disabled={ocupado || !itens.length} onClick={() => pagar("cartao")}>Cartão</button>
@@ -978,8 +1128,15 @@ export default function App() {
                   placeholder="Ex.: 12, Balcão ou João"
                 />
               </label>
+
               <footer className="modal-acoes">
-                <button type="button" className="botao botao-claro" onClick={() => setNovaComandaAberta(false)}>Cancelar</button>
+                <button
+                  type="button"
+                  className="botao botao-claro"
+                  onClick={() => setNovaComandaAberta(false)}
+                >
+                  Cancelar
+                </button>
                 <button className="botao botao-primario" disabled={ocupado}>Abrir comanda</button>
               </footer>
             </form>
@@ -1013,6 +1170,7 @@ export default function App() {
     (soma, item) => soma + Number(item.total || 0),
     0
   );
+
   const totalExibido = comandas.reduce(
     (soma, item) => soma + Number(item.total || 0),
     0
@@ -1022,6 +1180,7 @@ export default function App() {
     <div className="admin-app">
       <aside className="sidebar">
         <Marca detalhe="Administração" />
+
         <nav>
           {paginasAdmin.map(([destino, rotulo], indice) => (
             <button
@@ -1034,6 +1193,7 @@ export default function App() {
             </button>
           ))}
         </nav>
+
         <footer>
           <div><strong>{usuario.nome}</strong><small>Administrador</small></div>
           <button className="botao botao-sidebar" onClick={sair}>Sair</button>
@@ -1045,6 +1205,7 @@ export default function App() {
           <Marca detalhe={usuario.nome} />
           <button className="botao botao-claro" onClick={sair}>Sair</button>
         </div>
+
         <nav>
           {paginasAdmin.map(([destino, rotulo]) => (
             <button
@@ -1087,9 +1248,12 @@ export default function App() {
                 Usuário
                 <select value={filtroUsuario} onChange={event => setFiltroUsuario(event.target.value)}>
                   <option value="todos">Todos</option>
-                  {usuarios.map(item => <option key={item.id} value={String(item.id)}>{item.nome}</option>)}
+                  {usuarios.map(item => (
+                    <option key={item.id} value={String(item.id)}>{item.nome}</option>
+                  ))}
                 </select>
               </label>
+
               <label>
                 Tipo
                 <select value={filtroTipo} onChange={event => setFiltroTipo(event.target.value)}>
@@ -1101,11 +1265,15 @@ export default function App() {
                   <option value="pix">Pix</option>
                 </select>
               </label>
+
               <span>{comandasFiltradas.length} resultado(s)</span>
             </section>
 
             {comandasFiltradas.length === 0 ? (
-              <Vazio titulo="Nenhuma comanda encontrada" texto="Altere os filtros ou aguarde um novo atendimento." />
+              <Vazio
+                titulo="Nenhuma comanda encontrada"
+                texto="Altere os filtros ou aguarde um novo atendimento."
+              />
             ) : (
               <section className="grade-comandas grade-admin">
                 {comandasFiltradas.map(item => (
@@ -1122,6 +1290,7 @@ export default function App() {
                       <b>{moeda(item.total)}</b>
                       <small>Ver itens →</small>
                     </button>
+
                     <button
                       className="botao-excluir-card"
                       onClick={() => setComandaParaExcluir(item)}
@@ -1141,8 +1310,13 @@ export default function App() {
               sobre="Equipe"
               titulo="Usuários"
               texto="Crie acessos e edite nome, login, senha, perfil ou situação."
-              acao={<button className="botao botao-primario" onClick={() => abrirEditorUsuario(null)}>+ Novo usuário</button>}
+              acao={
+                <button className="botao botao-primario" onClick={() => abrirEditorUsuario(null)}>
+                  + Novo usuário
+                </button>
+              }
             />
+
             <section className="grade-cadastros">
               {usuarios.map(item => (
                 <article className={`cadastro-card ${item.ativo ? "" : "inativo"}`} key={item.id}>
@@ -1167,21 +1341,87 @@ export default function App() {
             <Cabecalho
               sobre="Cardápio"
               titulo="Produtos"
-              texto="Edite o nome, o preço ou retire um produto do atendimento."
-              acao={<button className="botao botao-primario" onClick={() => abrirEditorProduto(null)}>+ Novo produto</button>}
+              texto="Edite nome, categoria, preço e disponibilidade."
+              acao={
+                <button className="botao botao-primario" onClick={() => abrirEditorProduto(null)}>
+                  + Novo produto
+                </button>
+              }
             />
+
             <section className="grade-cadastros produtos-admin">
               {produtos.map(item => (
                 <article className={`cadastro-card ${item.ativo ? "" : "inativo"}`} key={item.id}>
                   <span className="avatar avatar-produto">{item.nome.slice(0, 1).toUpperCase()}</span>
                   <div>
                     <strong>{item.nome}</strong>
-                    <small>{item.ativo ? "Disponível no atendimento" : "Produto inativo"}</small>
+                    <small>
+                      {item.categoria || "Geral"} • {item.ativo ? "Disponível no atendimento" : "Produto inativo"}
+                    </small>
                   </div>
                   <b>{moeda(item.preco)}</b>
                   <button className="botao botao-claro" onClick={() => abrirEditorProduto(item)}>Editar</button>
                 </article>
               ))}
+            </section>
+          </>
+        )}
+
+        {pagina === "configuracoes" && (
+          <>
+            <Cabecalho
+              sobre="Administração"
+              titulo="Configurações"
+              texto="Altere os dados usados para gerar os pagamentos Pix."
+            />
+
+            <section className="painel">
+              <form className="formulario" onSubmit={salvarConfiguracoes}>
+                <label>
+                  Chave Pix
+                  <input
+                    required
+                    value={configuracoes.pix_chave}
+                    onChange={event => setConfiguracoes({
+                      ...configuracoes,
+                      pix_chave: event.target.value
+                    })}
+                    placeholder="CPF, telefone, e-mail ou chave aleatória"
+                  />
+                </label>
+
+                <label>
+                  Nome do recebedor
+                  <input
+                    required
+                    maxLength="25"
+                    value={configuracoes.pix_nome}
+                    onChange={event => setConfiguracoes({
+                      ...configuracoes,
+                      pix_nome: event.target.value
+                    })}
+                  />
+                </label>
+
+                <label>
+                  Cidade
+                  <input
+                    required
+                    maxLength="15"
+                    value={configuracoes.pix_cidade}
+                    onChange={event => setConfiguracoes({
+                      ...configuracoes,
+                      pix_cidade: event.target.value
+                    })}
+                  />
+                </label>
+
+                <footer className="formulario-rodape">
+                  <button className="botao botao-primario" disabled={ocupado}>
+                    {ocupado ? "Salvando..." : "Salvar configurações"}
+                  </button>
+                </footer>
+              </form>
             </section>
           </>
         )}
@@ -1194,26 +1434,38 @@ export default function App() {
               texto="Valores pagos e ainda não incluídos em um fechamento."
               acao={<button className="botao botao-claro" onClick={() => carregarCaixas()}>Atualizar</button>}
             />
+
             <section className="painel tabela-painel">
               <table className="tabela tabela-responsiva">
                 <thead>
-                  <tr><th>Usuário</th><th>Dinheiro</th><th>Cartão</th><th>Pix</th><th>Total</th><th>Ação</th></tr>
+                  <tr>
+                    <th>Usuário</th>
+                    <th>Dinheiro</th>
+                    <th>Cartão</th>
+                    <th>Pix</th>
+                    <th>Total</th>
+                    <th>Ação</th>
+                  </tr>
                 </thead>
+
                 <tbody>
                   {caixas.length === 0 ? (
                     <tr className="linha-vazia"><td colSpan="6">Nenhum usuário encontrado.</td></tr>
                   ) : (
                     caixas.map(item => (
                       <tr key={item.usuario_id}>
-                        <td data-label="Usuário"><strong>{item.usuario}</strong>{!item.ativo && <small>Inativo</small>}</td>
+                        <td data-label="Usuário">
+                          <strong>{item.usuario}</strong>
+                          {!item.ativo && <small>Inativo</small>}
+                        </td>
                         <td data-label="Dinheiro">{moeda(item.dinheiro)}</td>
                         <td data-label="Cartão">{moeda(item.cartao)}</td>
                         <td data-label="Pix">{moeda(item.pix)}</td>
                         <td data-label="Total"><strong>{moeda(item.total)}</strong></td>
                         <td data-label="Ação">
                           <button
-                            className="botao botao-perigo botao-tabela"
-                            disabled={Number(item.total) <= 0}
+                            className="botao botao-primario"
+                            disabled={Number(item.total || 0) <= 0}
                             onClick={() => setCaixaParaFechar(item)}
                           >
                             Fechar caixa
@@ -1231,65 +1483,76 @@ export default function App() {
         {pagina === "relatorios" && (
           <>
             <Cabecalho
-              sobre="Histórico diário"
-              titulo="Relatórios"
-              texto="Cada data consultada fica salva para abrir ou imprimir novamente."
+              sobre="Histórico"
+              titulo="Relatório diário"
+              texto="Consulte os totais do dia e o resultado de cada usuário."
               acao={
-                relatorio && (
-                  <button className="botao botao-sucesso" onClick={() => window.print()}>
-                    Imprimir
-                  </button>
-                )
+                <button className="botao botao-claro" onClick={() => window.print()}>
+                  Imprimir
+                </button>
               }
             />
-            <section className="painel filtros-relatorio">
-              <form
-                onSubmit={event => {
-                  event.preventDefault();
-                  carregarRelatorio(dataRelatorio);
-                }}
-              >
-                <label>
-                  Data
-                  <input
-                    type="date"
-                    value={dataRelatorio}
-                    onChange={event => setDataRelatorio(event.target.value)}
-                  />
-                </label>
-                <button className="botao botao-primario" disabled={ocupado}>
-                  {ocupado ? "Carregando..." : "Gerar e salvar"}
-                </button>
-              </form>
+
+            <section className="painel filtros">
               <label>
-                Relatórios salvos
-                <select
-                  value={datasRelatorios.some(item => item.data === dataRelatorio) ? dataRelatorio : ""}
-                  onChange={event => event.target.value && carregarRelatorio(event.target.value)}
-                >
-                  <option value="">Escolha uma data</option>
-                  {datasRelatorios.map(item => (
-                    <option key={item.data} value={item.data}>
-                      {formatarData(item.data)} — {moeda(item.total)}
-                    </option>
-                  ))}
-                </select>
+                Data
+                <input
+                  type="date"
+                  value={dataRelatorio}
+                  onChange={event => setDataRelatorio(event.target.value)}
+                />
               </label>
+
+              <button
+                className="botao botao-primario"
+                disabled={ocupado}
+                onClick={() => carregarRelatorio(dataRelatorio)}
+              >
+                Consultar
+              </button>
+
+              {datasRelatorios.length > 0 && (
+                <label>
+                  Relatórios salvos
+                  <select
+                    value={dataRelatorio}
+                    onChange={event => {
+                      setDataRelatorio(event.target.value);
+                      carregarRelatorio(event.target.value);
+                    }}
+                  >
+                    {datasRelatorios.map(data => (
+                      <option key={data} value={data}>{formatarData(data)}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </section>
 
             {relatorio && (
-              <section id="relatorio-impressao" className="painel relatorio">
-                <header>
-                  <div><span>Relatório salvo</span><h2>Relatório de comandas</h2></div>
-                  <strong>{formatarData(relatorio.data)}</strong>
-                </header>
-                <table className="tabela tabela-responsiva tabela-relatorio">
+              <section className="painel tabela-painel">
+                <div className="secao-topo">
+                  <div>
+                    <h2>{formatarData(relatorio.data)}</h2>
+                    <p>{relatorio.quantidade_comandas} comanda(s) fechada(s)</p>
+                  </div>
+                </div>
+
+                <table className="tabela tabela-responsiva">
                   <thead>
-                    <tr><th>Usuário</th><th>Comandas</th><th>Dinheiro</th><th>Cartão</th><th>Pix</th><th>Total</th></tr>
+                    <tr>
+                      <th>Usuário</th>
+                      <th>Comandas</th>
+                      <th>Dinheiro</th>
+                      <th>Cartão</th>
+                      <th>Pix</th>
+                      <th>Total</th>
+                    </tr>
                   </thead>
+
                   <tbody>
-                    {relatorio.usuarios.length === 0 ? (
-                      <tr className="linha-vazia"><td colSpan="6">Nenhuma comanda paga nesta data.</td></tr>
+                    {(relatorio.usuarios || []).length === 0 ? (
+                      <tr className="linha-vazia"><td colSpan="6">Nenhum movimento nesta data.</td></tr>
                     ) : (
                       relatorio.usuarios.map(item => (
                         <tr key={item.usuario_id}>
@@ -1303,6 +1566,7 @@ export default function App() {
                       ))
                     )}
                   </tbody>
+
                   <tfoot>
                     <tr>
                       <td data-label="Resumo">Total do dia</td>
@@ -1323,7 +1587,11 @@ export default function App() {
       {editorUsuario && (
         <Modal
           titulo={editorUsuario.id ? "Editar usuário" : "Novo usuário"}
-          subtitulo={editorUsuario.id ? "A senha só muda se você preencher o campo." : "Crie um acesso para a equipe."}
+          subtitulo={
+            editorUsuario.id
+              ? "A senha só muda se você preencher o campo."
+              : "Crie um acesso para a equipe."
+          }
           onClose={() => setEditorUsuario(null)}
         >
           <form className="formulario grade-formulario" onSubmit={salvarUsuario}>
@@ -1336,6 +1604,7 @@ export default function App() {
                 onChange={event => setEditorUsuario({ ...editorUsuario, nome: event.target.value })}
               />
             </label>
+
             <label>
               Login
               <input
@@ -1345,6 +1614,7 @@ export default function App() {
                 onChange={event => setEditorUsuario({ ...editorUsuario, login: event.target.value })}
               />
             </label>
+
             <label>
               {editorUsuario.id ? "Nova senha (opcional)" : "Senha"}
               <input
@@ -1356,6 +1626,7 @@ export default function App() {
                 onChange={event => setEditorUsuario({ ...editorUsuario, senha: event.target.value })}
               />
             </label>
+
             <label>
               Perfil
               <select
@@ -1367,6 +1638,7 @@ export default function App() {
                 <option value="admin">Administrador</option>
               </select>
             </label>
+
             <label className="campo-check">
               <input
                 type="checkbox"
@@ -1376,7 +1648,11 @@ export default function App() {
               />
               Usuário ativo
             </label>
-            {editorUsuario.id === usuario.id && <p className="nota-formulario">Seu próprio perfil deve permanecer como administrador ativo.</p>}
+
+            {editorUsuario.id === usuario.id && (
+              <p className="nota-formulario">Seu próprio perfil deve permanecer como administrador ativo.</p>
+            )}
+
             <footer className="modal-acoes formulario-rodape">
               <button type="button" className="botao botao-claro" onClick={() => setEditorUsuario(null)}>Cancelar</button>
               <button className="botao botao-primario" disabled={ocupado}>Salvar</button>
@@ -1391,9 +1667,9 @@ export default function App() {
           subtitulo="Defina como o produto aparecerá no atendimento."
           onClose={() => setEditorProduto(null)}
         >
-          <form className="formulario" onSubmit={salvarProduto}>
+          <form className="formulario grade-formulario" onSubmit={salvarProduto}>
             <label>
-              Nome do produto
+              Nome
               <input
                 autoFocus
                 required
@@ -1401,6 +1677,17 @@ export default function App() {
                 onChange={event => setEditorProduto({ ...editorProduto, nome: event.target.value })}
               />
             </label>
+
+            <label>
+              Categoria
+              <input
+                required
+                value={editorProduto.categoria || "Geral"}
+                onChange={event => setEditorProduto({ ...editorProduto, categoria: event.target.value })}
+                placeholder="Ex.: Bebidas, Lanches, Porções"
+              />
+            </label>
+
             <label>
               Preço
               <input
@@ -1413,6 +1700,7 @@ export default function App() {
                 onChange={event => setEditorProduto({ ...editorProduto, preco: event.target.value })}
               />
             </label>
+
             <label className="campo-check">
               <input
                 type="checkbox"
@@ -1421,7 +1709,8 @@ export default function App() {
               />
               Produto ativo
             </label>
-            <footer className="modal-acoes">
+
+            <footer className="modal-acoes formulario-rodape">
               <button type="button" className="botao botao-claro" onClick={() => setEditorProduto(null)}>Cancelar</button>
               <button className="botao botao-primario" disabled={ocupado}>Salvar</button>
             </footer>
@@ -1431,51 +1720,60 @@ export default function App() {
 
       {caixaParaFechar && (
         <Modal
-          titulo="Confirmar fechamento"
-          subtitulo={`Caixa de ${caixaParaFechar.usuario}`}
+          titulo="Fechar caixa?"
+          subtitulo={caixaParaFechar.usuario}
           onClose={() => setCaixaParaFechar(null)}
         >
-          <div className="resumo-caixa">
+          <div className="resumo-fechamento">
             <div><span>Dinheiro</span><strong>{moeda(caixaParaFechar.dinheiro)}</strong></div>
             <div><span>Cartão</span><strong>{moeda(caixaParaFechar.cartao)}</strong></div>
             <div><span>Pix</span><strong>{moeda(caixaParaFechar.pix)}</strong></div>
-            <div className="total"><span>Total</span><strong>{moeda(caixaParaFechar.total)}</strong></div>
+            <div><span>Total</span><strong>{moeda(caixaParaFechar.total)}</strong></div>
           </div>
+
           <footer className="modal-acoes">
             <button className="botao botao-claro" onClick={() => setCaixaParaFechar(null)}>Cancelar</button>
-            <button className="botao botao-perigo" disabled={ocupado} onClick={confirmarFechamento}>Confirmar</button>
+            <button className="botao botao-primario" disabled={ocupado} onClick={confirmarFechamento}>Confirmar fechamento</button>
           </footer>
         </Modal>
       )}
 
       {comanda && (
         <Modal
-          grande
-          titulo={`Mesa ${comanda.mesa}`}
-          subtitulo={`${comanda.usuario} • ${tipoComanda(comanda)} • Comanda #${comanda.id}`}
+          titulo={`Comanda #${comanda.id}`}
+          subtitulo={`Mesa ${comanda.mesa} • ${comanda.usuario || ""}`}
           onClose={() => {
             setComanda(null);
             setItens([]);
           }}
+          grande
         >
-          <table className="tabela tabela-responsiva tabela-itens">
-            <thead><tr><th>Produto</th><th>Quantidade</th><th>Preço</th><th>Subtotal</th></tr></thead>
+          <table className="tabela tabela-responsiva">
+            <thead>
+              <tr><th>Produto</th><th>Qtd.</th><th>Unitário</th><th>Subtotal</th></tr>
+            </thead>
             <tbody>
               {itens.length === 0 ? (
-                <tr className="linha-vazia"><td colSpan="4">A comanda está vazia.</td></tr>
+                <tr className="linha-vazia"><td colSpan="4">Nenhum item nesta comanda.</td></tr>
               ) : (
                 itens.map(item => (
                   <tr key={item.id}>
                     <td data-label="Produto"><strong>{item.nome}</strong></td>
-                    <td data-label="Quantidade">{item.quantidade}</td>
-                    <td data-label="Preço">{moeda(item.preco)}</td>
+                    <td data-label="Qtd.">{item.quantidade}</td>
+                    <td data-label="Unitário">{moeda(item.preco)}</td>
                     <td data-label="Subtotal"><strong>{moeda(item.subtotal)}</strong></td>
                   </tr>
                 ))
               )}
             </tbody>
-            <tfoot><tr><td data-label="Resumo" colSpan="3">Total</td><td data-label="Total">{moeda(comanda.total)}</td></tr></tfoot>
+            <tfoot>
+              <tr>
+                <td data-label="Resumo" colSpan="3">Total</td>
+                <td data-label="Total">{moeda(comanda.total)}</td>
+              </tr>
+            </tfoot>
           </table>
+
           <footer className="modal-acoes">
             <button
               className="botao botao-perigo"
@@ -1487,7 +1785,16 @@ export default function App() {
             >
               Excluir comanda
             </button>
-            <button className="botao botao-claro" onClick={() => { setComanda(null); setItens([]); }}>Fechar</button>
+
+            <button
+              className="botao botao-claro"
+              onClick={() => {
+                setComanda(null);
+                setItens([]);
+              }}
+            >
+              Fechar
+            </button>
           </footer>
         </Modal>
       )}
@@ -1499,9 +1806,13 @@ export default function App() {
           onClose={() => setComandaParaExcluir(null)}
         >
           <div className="confirmacao-perigosa">
-            <p>Os itens e o valor desta comanda serão removidos. Se ela estiver paga, o caixa e o relatório da data também serão atualizados.</p>
+            <p>
+              Os itens e o valor desta comanda serão removidos. Se ela estiver paga,
+              o caixa e o relatório da data também serão atualizados.
+            </p>
             <strong>Esta ação não pode ser desfeita.</strong>
           </div>
+
           <footer className="modal-acoes">
             <button className="botao botao-claro" onClick={() => setComandaParaExcluir(null)}>Cancelar</button>
             <button className="botao botao-perigo" disabled={ocupado} onClick={excluirComanda}>Excluir definitivamente</button>
